@@ -1,0 +1,10 @@
+pytesseract
+pdfplumber
+pillow
+pandas
+numpy
+langchain
+openai
+jinja2
+weasyprint
+python-dotenv
