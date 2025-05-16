@@ -1,0 +1,23 @@
+# Google Cloud credentials
+gcloud-credentials.json
+*.json
+.env
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Python specific
+*.pyc
+*.pyo
+*.pyd
+
