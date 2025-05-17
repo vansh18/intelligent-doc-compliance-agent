@@ -1,8 +1,5 @@
-from google.cloud import vision
-import io
 import os
 
-# Set path to credentials
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcloud-credentials.json"
 
 def ocr_image(image_path):
@@ -11,6 +8,7 @@ def ocr_image(image_path):
     import io
 
     client = vision.ImageAnnotatorClient()
+    print("Processing...")
 
     with io.open(image_path, 'rb') as image_file:
         content = image_file.read()

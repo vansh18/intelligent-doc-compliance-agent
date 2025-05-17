@@ -8,3 +8,8 @@ openai
 jinja2
 weasyprint
 python-dotenv
+pdf2image==1.16.3
+google-cloud-vision==3.4.4
+google-generativeai==0.3.1
+Pillow==10.0.0
+psycopg2-binary==2.9.9
