@@ -1,6 +1,6 @@
 import os
 import google.generativeai as genai
-from typing import Dict, Any
+from typing import Dict, Any, List
 from .pdf_parser import parse_pdf
 import json
 import time
@@ -104,12 +104,10 @@ def detect_vendor(text: str) -> Dict[str, Any]:
             )
         )
         
-        # Clean and parse the response
         response_text = response.text.strip()
         try:
             vendor_info = json.loads(response_text)
         except json.JSONDecodeError:
-            # If JSON parsing fails, try to extract JSON-like structure
             import re
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
@@ -128,7 +126,6 @@ def detect_vendor(text: str) -> Dict[str, Any]:
                     "contact": None
                 }
         
-        # Ensure all required fields exist
         if not isinstance(vendor_info, dict):
             vendor_info = {
                 "name": None,
@@ -221,12 +218,11 @@ def extract_document_fields(text: str, doc_type: str) -> Dict[str, Any]:
             )
         )
         
-        # Clean and parse the response
+
         response_text = response.text.strip()
         try:
             extracted_fields = json.loads(response_text)
         except json.JSONDecodeError:
-            # If JSON parsing fails, try to extract JSON-like structure
             import re
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
@@ -237,7 +233,6 @@ def extract_document_fields(text: str, doc_type: str) -> Dict[str, Any]:
             else:
                 extracted_fields = {}
         
-        # Ensure we have a dictionary
         if not isinstance(extracted_fields, dict):
             extracted_fields = {}
             
@@ -396,3 +391,41 @@ def doc_handler(path: str) -> Dict[str, Any]:
             "matches": None
         }
     
+def process_multiple_documents(paths: List[str]) -> List[Dict[str, Any]]:
+    """
+    Process multiple documents and return their combined data.
+    
+    Args:
+        paths (List[str]): List of paths to document files.
+        
+    Returns:
+        List[Dict[str, Any]]: List of processed documents, each containing:
+            - document_type: Classified document type
+            - vendor_info: Extracted vendor information
+            - extracted_fields: Document-specific fields
+            - metadata: Additional information about the processing
+            - matches: Document matching results (if applicable)
+    """
+    processed_docs = []
+    
+    for path in paths:
+        try:
+            doc_result = doc_handler(path)
+            processed_docs.append(doc_result)
+        except Exception as e:
+            print(f"Error processing document {path}: {str(e)}")
+            processed_docs.append({
+                "document_type": "unknown",
+                "vendor_info": None,
+                "extracted_fields": {},
+                "metadata": {
+                    "file_path": path,
+                    "file_extension": os.path.splitext(path)[1].lower() if path else None,
+                    "success": False,
+                    "error": str(e),
+                    "processing_time": None
+                },
+                "matches": None
+            })
+    
+    return processed_docs
