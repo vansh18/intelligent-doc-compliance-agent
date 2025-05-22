@@ -1,8 +1,9 @@
 import os
 import google.generativeai as genai
 from typing import Dict, Any
-from pdf_parser import parse_pdf
+from .pdf_parser import parse_pdf
 import json
+import time
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
@@ -63,72 +64,6 @@ def doc_classifer(text):
         print(f"Error in document classification: {str(e)}")
         return "unknown"
     
-def doc_handler(path: str) -> Dict[str, Any]:
-    """
-    Handle document based on its extension and content.
-    
-    Args:
-        path (str): Path to the document file.
-        
-    Returns:
-        Dict[str, Any]: Dictionary containing:
-            - raw_text: Extracted text from the document
-            - doc_type: Classified document type
-            - metadata: Additional information about the processing
-    """
-    try:
-        _, ext = os.path.splitext(path)
-        ext = ext.lower()
-        
-        result = {
-            "raw_text": "",
-            "doc_type": "unknown",
-            "metadata": {
-                "file_path": path,
-                "file_extension": ext,
-                "success": False,
-                "error": None
-            }
-        }
-
-        if ext == '.pdf':
-            parsed_result = parse_pdf(path)
-            result["raw_text"] = parsed_result["raw_text"]
-            result["metadata"].update(parsed_result["metadata"])
-            
-            if parsed_result["metadata"]["success"]:
-                result["doc_type"] = doc_classifer(parsed_result["raw_text"])
-                result["metadata"]["success"] = True
-                
-        elif ext in ['.jpg', '.jpeg', '.png', '.tiff', '.bmp']:
-            from .gcloud_ocr import ocr_image
-            result["raw_text"] = ocr_image(path)
-            result["metadata"].update({
-                "source": "OCR",
-                "success": True
-            })
-            result["doc_type"] = doc_classifer(result["raw_text"])
-            
-        else:
-            result["metadata"]["error"] = f"Unsupported file type: {ext}"
-            return result
-            
-        return result
-        
-    except Exception as e:
-        error_msg = f"Error processing document: {str(e)}"
-        print(error_msg)
-        return {
-            "raw_text": "",
-            "doc_type": "unknown",
-            "metadata": {
-                "file_path": path,
-                "file_extension": ext if 'ext' in locals() else None,
-                "success": False,
-                "error": error_msg
-            }
-        }
-    
 def detect_vendor(text: str) -> Dict[str, Any]:
     """
     Detect vendor information from document text.
@@ -153,6 +88,7 @@ def detect_vendor(text: str) -> Dict[str, Any]:
 
         If any field is not found, set its value to null.
         Return ONLY the JSON object, no additional text.
+        Make sure the response is valid JSON format.
 
         Document text:
         {text}
@@ -168,7 +104,38 @@ def detect_vendor(text: str) -> Dict[str, Any]:
             )
         )
         
-        vendor_info = json.loads(response.text.strip())
+        # Clean and parse the response
+        response_text = response.text.strip()
+        try:
+            vendor_info = json.loads(response_text)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract JSON-like structure
+            import re
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    vendor_info = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    vendor_info = {
+                        "name": None,
+                        "address": None,
+                        "contact": None
+                    }
+            else:
+                vendor_info = {
+                    "name": None,
+                    "address": None,
+                    "contact": None
+                }
+        
+        # Ensure all required fields exist
+        if not isinstance(vendor_info, dict):
+            vendor_info = {
+                "name": None,
+                "address": None,
+                "contact": None
+            }
+        
         return vendor_info
         
     except Exception as e:
@@ -238,6 +205,7 @@ def extract_document_fields(text: str, doc_type: str) -> Dict[str, Any]:
         
         If any field is not found, set its value to null.
         Return ONLY the JSON object, no additional text.
+        Make sure the response is valid JSON format.
 
         Document text:
         {text}
@@ -253,7 +221,26 @@ def extract_document_fields(text: str, doc_type: str) -> Dict[str, Any]:
             )
         )
         
-        extracted_fields = json.loads(response.text.strip())
+        # Clean and parse the response
+        response_text = response.text.strip()
+        try:
+            extracted_fields = json.loads(response_text)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, try to extract JSON-like structure
+            import re
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    extracted_fields = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    extracted_fields = {}
+            else:
+                extracted_fields = {}
+        
+        # Ensure we have a dictionary
+        if not isinstance(extracted_fields, dict):
+            extracted_fields = {}
+            
         return extracted_fields
         
     except Exception as e:
@@ -310,5 +297,102 @@ def match_documents(doc1: Dict[str, Any], doc2: Dict[str, Any]) -> Dict[str, Any
             "match_score": 0,
             "matches": [],
             "discrepancies": [f"Error during matching: {str(e)}"]
+        }
+    
+def doc_handler(path: str) -> Dict[str, Any]:
+    """
+    Handle document based on its extension and content.
+    
+    Args:
+        path (str): Path to the document file.
+        
+    Returns:
+        Dict[str, Any]: Dictionary containing:
+            - document_type: Classified document type
+            - vendor_info: Extracted vendor information
+            - extracted_fields: Document-specific fields
+            - metadata: Additional information about the processing
+            - matches: Document matching results (if applicable)
+    """
+    try:
+        _, ext = os.path.splitext(path)
+        ext = ext.lower()
+        
+        result = {
+            "document_type": "unknown",
+            "vendor_info": None,
+            "extracted_fields": {},
+            "metadata": {
+                "file_path": path,
+                "file_extension": ext,
+                "success": False,
+                "error": None,
+                "processing_time": None
+            },
+            "matches": None
+        }
+
+        start_time = time.time()
+
+        if ext == '.pdf':
+            parsed_result = parse_pdf(path)
+            raw_text = parsed_result["raw_text"]
+            result["metadata"].update(parsed_result["metadata"])
+            
+            if parsed_result["metadata"]["success"]:
+                doc_type = doc_classifer(raw_text)
+                result["document_type"] = doc_type
+                result["vendor_info"] = detect_vendor(raw_text)
+                result["extracted_fields"] = extract_document_fields(raw_text, doc_type)
+                
+                if doc_type in ["invoice", "grn"] and "po_reference" in result["extracted_fields"]:
+                    result["matches"] = {
+                        "status": "pending",
+                        "message": "PO matching requires implementation of PO lookup functionality"
+                    }
+                
+                result["metadata"]["success"] = True
+                
+        elif ext in ['.jpg', '.jpeg', '.png', '.tiff', '.bmp']:
+            from .gcloud_ocr import ocr_image
+            raw_text = ocr_image(path)
+            result["metadata"].update({
+                "source": "OCR",
+                "success": True
+            })
+
+            doc_type = doc_classifer(raw_text)
+            result["document_type"] = doc_type
+            result["vendor_info"] = detect_vendor(raw_text)
+            result["extracted_fields"] = extract_document_fields(raw_text, doc_type)
+            
+            if doc_type in ["invoice", "grn"] and "po_reference" in result["extracted_fields"]:
+                result["matches"] = {
+                    "status": "pending",
+                    "message": "PO matching requires implementation of PO lookup functionality"
+                }
+            
+        else:
+            result["metadata"]["error"] = f"Unsupported file type: {ext}"
+            return result
+
+        result["metadata"]["processing_time"] = time.time() - start_time
+        return result
+        
+    except Exception as e:
+        error_msg = f"Error processing document: {str(e)}"
+        print(error_msg)
+        return {
+            "document_type": "unknown",
+            "vendor_info": None,
+            "extracted_fields": {},
+            "metadata": {
+                "file_path": path,
+                "file_extension": ext if 'ext' in locals() else None,
+                "success": False,
+                "error": error_msg,
+                "processing_time": None
+            },
+            "matches": None
         }
     

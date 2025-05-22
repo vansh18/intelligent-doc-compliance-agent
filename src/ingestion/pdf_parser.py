@@ -4,7 +4,7 @@ import google.generativeai as genai
 from langchain_community.document_loaders import PyPDFLoader
 from typing import Dict, Any
 from pdf2image import convert_from_path
-from gcloud_ocr import ocr_image
+from .gcloud_ocr import ocr_image
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)

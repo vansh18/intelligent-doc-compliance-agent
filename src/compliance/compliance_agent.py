@@ -3,381 +3,268 @@ import json
 from typing import Dict, Any, List, Tuple
 from datetime import datetime
 import re
-from rule_generator import ComplianceRuleGenerator
+from decimal import Decimal
 
 class ComplianceAgent:
     def __init__(self):
-        self.rule_generator = ComplianceRuleGenerator()
-        self.rules = self.rule_generator.schema['rules']
+        self.rules = self._load_rules()
         
-    def evaluate_document(self, document_data: Dict[str, Any], doc_type: str) -> Dict[str, Any]:
+    def _load_rules(self) -> Dict[str, Any]:
+        """Load compliance rules from JSON file."""
+        try:
+            rules_path = os.path.join(os.path.dirname(__file__), 'compliance_rules.json')
+            with open(rules_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading rules: {str(e)}")
+            return {"rules": []}
+    
+    def clear_rules(self) -> None:
+        """Clear all rules from the compliance rules file."""
+        try:
+            rules_path = os.path.join(os.path.dirname(__file__), 'compliance_rules.json')
+            empty_rules = {
+                "version": "1.0",
+                "metadata": {
+                    "last_updated": datetime.now().strftime("%Y-%m-%d"),
+                    "author": "Compliance Agent",
+                    "description": "Structured compliance rules for document validation"
+                },
+                "document_types": [
+                    "invoice",
+                    "purchase_order",
+                    "goods_receipt"
+                ],
+                "rules": []
+            }
+            with open(rules_path, 'w') as f:
+                json.dump(empty_rules, f, indent=4)
+            self.rules = empty_rules
+            print("Rules cleared successfully")
+        except Exception as e:
+            print(f"Error clearing rules: {str(e)}")
+    
+    def validate_documents(self, documents: List[Dict[str, Any]], document_type: str) -> Dict[str, Any]:
         """
-        Evaluate a document against all applicable compliance rules.
+        Validate multiple documents against applicable rules.
         
         Args:
-            document_data (Dict[str, Any]): Extracted document data
-            doc_type (str): Type of document (invoice, purchase_order, goods_receipt)
+            documents (List[Dict[str, Any]]): List of structured document data
+            document_type (str): Type of document (invoice, purchase_order, goods_receipt)
             
         Returns:
-            Dict[str, Any]: Evaluation results including violations and overall status
+            Dict[str, Any]: Combined validation results for all documents
         """
-        results = {
-            "document_type": doc_type,
-            "evaluation_time": datetime.now().isoformat(),
-            "overall_status": "compliant",
-            "violations": [],
-            "warnings": [],
-            "passed_rules": []
-        }
+        all_results = []
         
-        applicable_rules = [
-            rule for rule in self.rules 
-            if doc_type in rule['applicable_documents']
-        ]
-        
-        for rule in applicable_rules:
-            validation_result = self._validate_rule(rule, document_data)
+        for idx, document_data in enumerate(documents, 1):
+            print(f"\nValidating Document {idx}:")
+            print(f"Document Data: {json.dumps(document_data, indent=2)}")
             
-            if validation_result['status'] == 'violation':
-                results['violations'].append({
-                    'rule_id': rule['rule_id'],
-                    'rule_name': rule['name'],
-                    'description': rule['description'],
-                    'severity': rule['severity'],
-                    'details': validation_result['details']
-                })
-                if rule['severity'] == 'high':
-                    results['overall_status'] = 'non_compliant'
-            elif validation_result['status'] == 'warning':
-                results['warnings'].append({
-                    'rule_id': rule['rule_id'],
-                    'rule_name': rule['name'],
-                    'description': rule['description'],
-                    'details': validation_result['details']
-                })
-            else:
-                results['passed_rules'].append({
-                    'rule_id': rule['rule_id'],
-                    'rule_name': rule['name']
-                })
+            document_results = self.validate_document(document_data, document_type)
+            all_results.append({
+                'document_index': idx,
+                'document_data': document_data,
+                'validation_results': document_results,
+                'summary': self.get_validation_summary(document_results)
+            })
         
-        return results
+        return {
+            'total_documents': len(documents),
+            'document_results': all_results,
+            'overall_summary': self._get_overall_summary(all_results)
+        }
+    
+    def _get_overall_summary(self, all_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate overall summary for multiple documents."""
+        total_rules = sum(len(doc['validation_results']) for doc in all_results)
+        total_passed = sum(doc['summary']['passed'] for doc in all_results)
+        total_failed = sum(doc['summary']['failed'] for doc in all_results)
+        total_errors = sum(doc['summary']['errors'] for doc in all_results)
+        total_high_severity = sum(doc['summary']['high_severity_failures'] for doc in all_results)
+        
+        return {
+            'total_documents': len(all_results),
+            'total_rules_checked': total_rules,
+            'total_passed': total_passed,
+            'total_failed': total_failed,
+            'total_errors': total_errors,
+            'total_high_severity_failures': total_high_severity,
+            'timestamp': datetime.now().isoformat()
+        }
+    
+    def validate_document(self, document_data: Dict[str, Any], document_type: str) -> List[Dict[str, Any]]:
+        """
+        Validate a document against all applicable rules.
+        
+        Args:
+            document_data (Dict[str, Any]): Structured document data
+            document_type (str): Type of document (invoice, purchase_order, goods_receipt)
+            
+        Returns:
+            List[Dict[str, Any]]: List of validation results
+        """
+        validation_results = []
+        
+        for rule in self.rules.get('rules', []):
+            if document_type not in rule.get('applicable_documents', []):
+                continue
+                
+            result = self._validate_rule(rule, document_data)
+            validation_results.append(result)
+            
+        return validation_results
     
     def _validate_rule(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Validate a single rule against document data.
         
         Args:
-            rule (Dict[str, Any]): The rule to validate
+            rule (Dict[str, Any]): Rule to validate
             document_data (Dict[str, Any]): Document data to validate against
             
         Returns:
             Dict[str, Any]: Validation result
         """
-        validation_type = rule['validation']['type']
+        field = rule.get('field')
+        validation = rule.get('validation', {})
+        validation_type = validation.get('type')
+        
+        if field not in document_data:
+            return {
+                'rule_id': rule['rule_id'],
+                'name': rule['name'],
+                'status': 'failed',
+                'message': f"Field '{field}' not found in document",
+                'severity': rule['severity'],
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        value = document_data[field]
+        parameters = validation.get('parameters', {})
         
         try:
-            if validation_type == 'regex':
-                return self._validate_regex(rule, document_data)
-            elif validation_type == 'numeric':
-                return self._validate_numeric(rule, document_data)
+            is_valid = False
+            error_message = validation.get('error_message', 'Validation failed')
+            
+            if validation_type == 'numeric':
+                is_valid = self._validate_numeric(value, parameters)
+            elif validation_type == 'regex':
+                is_valid = self._validate_regex(value, parameters)
             elif validation_type == 'date_comparison':
-                return self._validate_date_comparison(rule, document_data)
-            elif validation_type == 'currency_consistency':
-                return self._validate_currency_consistency(rule, document_data)
-            elif validation_type == 'cross_reference':
-                return self._validate_cross_reference(rule, document_data)
-            elif validation_type == 'line_item_calculation':
-                return self._validate_line_item_calculation(rule, document_data)
-            elif validation_type == 'address_validation':
-                return self._validate_address(rule, document_data)
+                is_valid = self._validate_date_comparison(value, parameters)
             else:
-                return {
-                    'status': 'warning',
-                    'details': f"Unknown validation type: {validation_type}"
-                }
+                is_valid = True  # Custom validation types are handled by the agent
+                
+            return {
+                'rule_id': rule['rule_id'],
+                'name': rule['name'],
+                'status': 'passed' if is_valid else 'failed',
+                'message': None if is_valid else error_message,
+                'severity': rule['severity'],
+                'timestamp': datetime.now().isoformat()
+            }
+            
         except Exception as e:
             return {
-                'status': 'warning',
-                'details': f"Validation error: {str(e)}"
+                'rule_id': rule['rule_id'],
+                'name': rule['name'],
+                'status': 'error',
+                'message': f"Validation error: {str(e)}",
+                'severity': rule['severity'],
+                'timestamp': datetime.now().isoformat()
             }
     
-    def _validate_regex(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_numeric(self, value: Any, parameters: Dict[str, Any]) -> bool:
+        """Validate numeric values."""
+        try:
+            if not isinstance(value, (int, float, Decimal)):
+                value = Decimal(str(value))
+                
+            data_type = parameters.get('data_type', 'decimal')
+            if data_type == 'decimal':
+                if 'min_value' in parameters and value < Decimal(str(parameters['min_value'])):
+                    return False
+                if 'max_value' in parameters and value > Decimal(str(parameters['max_value'])):
+                    return False
+                if 'expected_value' in parameters:
+                    expected = Decimal(str(parameters['expected_value']))
+                    return abs(value - expected) < Decimal('0.01')
+                    
+            return True
+            
+        except (ValueError, TypeError, ArithmeticError):
+            return False
+    
+    def _validate_regex(self, value: Any, parameters: Dict[str, Any]) -> bool:
         """Validate using regex pattern."""
-        pattern = rule['validation']['pattern']
-        field = rule['validation'].get('field', 'invoice_number')  # Default field
-        
-        if field not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required field '{field}' not found in document"
-            }
-        
-        value = str(document_data[field])
-        if not re.match(pattern, value):
-            return {
-                'status': 'violation',
-                'details': rule['validation']['error_message']
-            }
-        
-        return {'status': 'compliant'}
-    
-    def _validate_numeric(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate numeric conditions."""
-        field = rule['validation']['field']
-        operator = rule['validation']['operator']
-        expected_value = rule['validation']['value']
-        
-        if field not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required field '{field}' not found in document"
-            }
-        
         try:
-            actual_value = float(document_data[field])
-        except (ValueError, TypeError):
-            return {
-                'status': 'violation',
-                'details': f"Field '{field}' must be a numeric value"
-            }
-        
-        is_valid = False
-        if operator == '<=':
-            is_valid = actual_value <= expected_value
-        elif operator == '>=':
-            is_valid = actual_value >= expected_value
-        elif operator == '<':
-            is_valid = actual_value < expected_value
-        elif operator == '>':
-            is_valid = actual_value > expected_value
-        elif operator == '==':
-            is_valid = actual_value == expected_value
-        
-        if not is_valid:
-            return {
-                'status': 'violation',
-                'details': rule['validation']['error_message']
-            }
-        
-        return {'status': 'compliant'}
+            if not isinstance(value, str):
+                value = str(value)
+                
+            pattern = parameters.get('pattern', '')
+            case_sensitive = parameters.get('case_sensitive', True)
+            
+            if not case_sensitive:
+                pattern = f"(?i){pattern}"
+                
+            return bool(re.match(pattern, value))
+            
+        except (re.error, TypeError):
+            return False
     
-    def _validate_date_comparison(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _validate_date_comparison(self, value: Any, parameters: Dict[str, Any]) -> bool:
         """Validate date comparisons."""
-        fields = rule['validation']['fields']
-
-        first_field = next(iter(fields.items()))
-        field_name = first_field[0]
-        operator = first_field[1]
-        
-        if field_name not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required field '{field_name}' not found in document"
-            }
-        
         try:
-            date1 = datetime.strptime(document_data[field_name], "%Y-%m-%d")
-        except ValueError:
-            return {
-                'status': 'violation',
-                'details': f"Field '{field_name}' must be in YYYY-MM-DD format"
-            }
-        
-        second_field = next((f for f in fields.items() if f[0] != field_name), None)
-        if second_field:
-            field2_name = second_field[0]
-            if field2_name not in document_data:
-                return {
-                    'status': 'violation',
-                    'details': f"Required field '{field2_name}' not found in document"
-                }
+            if not isinstance(value, str):
+                value = str(value)
+                
+            date_value = datetime.fromisoformat(value)
+            comparison_type = parameters.get('comparison_type', 'equals')
+            comparison_date = datetime.fromisoformat(parameters.get('comparison_date', ''))
             
-            try:
-                date2 = datetime.strptime(document_data[field2_name], "%Y-%m-%d")
-            except ValueError:
-                return {
-                    'status': 'violation',
-                    'details': f"Field '{field2_name}' must be in YYYY-MM-DD format"
-                }
+            if comparison_type == 'equals':
+                return date_value == comparison_date
+            elif comparison_type == 'before':
+                return date_value < comparison_date
+            elif comparison_type == 'after':
+                return date_value > comparison_date
+            elif comparison_type == 'between':
+                start_date = datetime.fromisoformat(parameters.get('start_date', ''))
+                end_date = datetime.fromisoformat(parameters.get('end_date', ''))
+                return start_date <= date_value <= end_date
+                
+            return False
             
-            is_valid = False
-            if operator == '>':
-                is_valid = date1 > date2
-            elif operator == '<':
-                is_valid = date1 < date2
-            elif operator == '>=':
-                is_valid = date1 >= date2
-            elif operator == '<=':
-                is_valid = date1 <= date2
-            elif operator == '==':
-                is_valid = date1 == date2
-            
-            if not is_valid:
-                return {
-                    'status': 'violation',
-                    'details': rule['validation']['error_message']
-                }
-        
-        return {'status': 'compliant'}
-
-    def _validate_currency_consistency(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
+        except (ValueError, TypeError):
+            return False
+    
+    def get_validation_summary(self, validation_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Validate currency consistency across document fields.
-        
-        Args: 
-            rule (Dict[str, Any]): The rule to validate
-            document_data (Dict[str, Any]): Document data to validate against
-        Returns:
-            Dict[str, Any]: Validation result
-        """
-
-        currency_field = rule['validation']['currency_field']
-        allowed_currencies = rule['validation']['allowed_currencies']
-        
-        if currency_field not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required currency field '{currency_field}' not found in document"
-            }
-        
-        currency = document_data[currency_field]
-        if currency not in allowed_currencies:
-            return {
-                'status': 'violation',
-                'details': f"Currency '{currency}' is not in the allowed list: {', '.join(allowed_currencies)}"
-            }
-        
-        if 'line_items' in document_data:
-            for item in document_data['line_items']:
-                if 'currency' in item and item['currency'] != currency:
-                    return {
-                        'status': 'violation',
-                        'details': f"Line item currency '{item['currency']}' does not match document currency '{currency}'"
-                    }
-        
-        return {'status': 'compliant'}
-
-    def _validate_cross_reference(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate cross-references between related documents.
+        Generate a summary of validation results.
         
         Args:
-            rule (Dict[str, Any]): The rule to validate
-            document_data (Dict[str, Any]): Document data to validate against
-        Returns:
-            Dict[str, Any]: Validation result
-        """
-        reference_field = rule['validation']['reference_field']
-        reference_type = rule['validation']['reference_type']
-        reference_format = rule['validation'].get('reference_format')
-        
-        if reference_field not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required reference field '{reference_field}' not found in document"
-            }
-        
-        reference = document_data[reference_field]
-        
-        if reference_format and not re.match(reference_format, str(reference)):
-            return {
-                'status': 'violation',
-                'details': f"Reference '{reference}' does not match required format"
-            }
-        
-        return {'status': 'compliant'}
-
-    def _validate_line_item_calculation(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate line item calculations and totals.
-        
-        Args:
-            rule (Dict[str, Any]): The rule to validate
-            document_data (Dict[str, Any]): Document data to validate against
-        Returns:
-            Dict[str, Any]: Validation result
-        """
-        if 'line_items' not in document_data:
-            return {
-                'status': 'violation',
-                'details': "Document must contain line items"
-            }
-        
-        total_amount = 0
-        for item in document_data['line_items']:
-            if not all(k in item for k in ['quantity', 'unit_price']):
-                return {
-                    'status': 'violation',
-                    'details': "Each line item must have quantity and unit price"
-                }
+            validation_results (List[Dict[str, Any]]): List of validation results
             
-            try:
-                item_total = float(item['quantity']) * float(item['unit_price'])
-                if 'total' in item and abs(float(item['total']) - item_total) > 0.01:
-                    return {
-                        'status': 'violation',
-                        'details': f"Line item total {item['total']} does not match calculated total {item_total}"
-                    }
-                total_amount += item_total
-            except (ValueError, TypeError):
-                return {
-                    'status': 'violation',
-                    'details': "Invalid numeric values in line item"
-                }
-        
-        if 'total_amount' in document_data:
-            doc_total = float(document_data['total_amount'])
-            if abs(doc_total - total_amount) > 0.01:
-                return {
-                    'status': 'violation',
-                    'details': f"Document total {doc_total} does not match sum of line items {total_amount}"
-                }
-        
-        return {'status': 'compliant'}
-
-    def _validate_address(self, rule: Dict[str, Any], document_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate address format and required components.
-        
-        Args:
-            rule (Dict[str, Any]): The rule to validate
-            document_data (Dict[str, Any]): Document data to validate against
-
         Returns:
-            Dict[str, Any]: Validation result
+            Dict[str, Any]: Summary of validation results
         """
-        address_field = rule['validation']['address_field']
-        required_components = rule['validation']['required_components']
+        total = len(validation_results)
+        passed = sum(1 for r in validation_results if r['status'] == 'passed')
+        failed = sum(1 for r in validation_results if r['status'] == 'failed')
+        errors = sum(1 for r in validation_results if r['status'] == 'error')
         
-        if address_field not in document_data:
-            return {
-                'status': 'violation',
-                'details': f"Required address field '{address_field}' not found in document"
-            }
+        high_severity_failures = [
+            r for r in validation_results 
+            if r['status'] == 'failed' and r['severity'] == 'high'
+        ]
         
-        address = document_data[address_field]
-        
-        if not isinstance(address, dict):
-            return {
-                'status': 'violation',
-                'details': f"Address must be a structured object with components"
-            }
-
-        missing_components = [comp for comp in required_components if comp not in address]
-        if missing_components:
-            return {
-                'status': 'violation',
-                'details': f"Missing required address components: {', '.join(missing_components)}"
-            }
-
-        if 'postal_code_format' in rule['validation']:
-            postal_code = address.get('postal_code', '')
-            if not re.match(rule['validation']['postal_code_format'], postal_code):
-                return {
-                    'status': 'violation',
-                    'details': f"Invalid postal code format: {postal_code}"
-                }
-        
-        return {'status': 'compliant'}
+        return {
+            'total_rules': total,
+            'passed': passed,
+            'failed': failed,
+            'errors': errors,
+            'high_severity_failures': len(high_severity_failures),
+            'timestamp': datetime.now().isoformat()
+        }
 
