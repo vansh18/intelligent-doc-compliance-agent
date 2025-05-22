@@ -224,9 +224,10 @@ def main():
                 try:
                     reports_dir = os.path.join(os.getcwd(), "reports")
                     os.makedirs(reports_dir, exist_ok=True)
+                    
                     report_generator = ComplianceReportGenerator()
                     report_html = report_generator.generate_report(st.session_state.validation_results)
-
+                    
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     report_path = os.path.join(reports_dir, f"compliance_report_{timestamp}.html")
                     
@@ -237,7 +238,7 @@ def main():
                         f'<div class="status-box">✅ Report generated successfully</div>',
                         unsafe_allow_html=True
                     )
-
+                    
                     st.markdown("### Report Preview")
                     st.markdown(
                         f'<iframe src="data:text/html;base64,{base64.b64encode(report_html.encode()).decode()}" width="100%" height="800" style="border: none;"></iframe>',
@@ -252,11 +253,24 @@ def main():
                             mime="text/html"
                         )
                     
+                    # Clear compliance rules and session state after successful report generation
+                    try:
+                        rule_generator = ComplianceRuleGenerator()
+                        rule_generator.clear_rules()
+                        st.session_state.rules = []
+                        st.session_state.processed_docs = None
+                        st.session_state.validation_results = None
+                        print("[DEBUG] Cleared compliance rules and session state")
+                    except Exception as e:
+                        print(f"[DEBUG] Error clearing rules: {str(e)}")
+                    
                 except Exception as e:
                     st.markdown(
                         f'<div class="status-box error-box">❌ Error generating report: {str(e)}</div>',
                         unsafe_allow_html=True
                     )
+                    print(f"[DEBUG] Error generating report: {str(e)}")
+                    print(f"[DEBUG] Validation results: {st.session_state.validation_results}")
 
 if __name__ == "__main__":
     main()
